@@ -13,7 +13,7 @@ pub struct PerfSnap {
     pub dpc_pct: Option<f32>,
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, gl_check))]
 mod imp {
     use super::PerfSnap;
     use std::collections::HashMap;
@@ -31,7 +31,7 @@ mod imp {
     }
 
     #[link(name = "pdh")]
-    extern "system" {
+    unsafe extern "system" {
         fn PdhOpenQueryW(src: *const u16, user: usize, q: *mut isize) -> u32;
         fn PdhAddEnglishCounterW(q: isize, path: *const u16, user: usize, c: *mut isize) -> u32;
         fn PdhCollectQueryData(q: isize) -> u32;
@@ -40,7 +40,7 @@ mod imp {
         fn PdhCloseQuery(q: isize) -> u32;
     }
     #[link(name = "user32")]
-    extern "system" {
+    unsafe extern "system" {
         fn GetForegroundWindow() -> isize;
         fn GetWindowThreadProcessId(hwnd: isize, pid: *mut u32) -> u32;
     }
@@ -186,7 +186,7 @@ mod imp {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, gl_check)))]
 mod imp {
     use super::PerfSnap;
     pub struct Perf;
