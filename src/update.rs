@@ -24,7 +24,13 @@ pub fn check() -> Option<Found> {
     let mut resp = ureq::get(&url).header("User-Agent", "gamelens").call().ok()?;
     let body = resp.body_mut().read_to_string().ok()?;
     let j: serde_json::Value = serde_json::from_str(&body).ok()?;
-    let tag = j.get("tag_name")?.as_str()?.to_string();
+    // версия берётся из имени релиза (тег всегда "latest"), запасной вариант — tag_name
+    let tag = j
+        .get("name")
+        .and_then(|n| n.as_str())
+        .filter(|n| !n.trim().is_empty())
+        .or_else(|| j.get("tag_name").and_then(|n| n.as_str()))?
+        .to_string();
     if !newer(&tag, VERSION) {
         return None;
     }
