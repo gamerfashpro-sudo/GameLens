@@ -49,6 +49,12 @@ pub struct Config {
     pub mode: OverlayMode,
     /// значок в трее в игровом режиме (быстрый возврат к программе)
     pub tray: bool,
+    /// программы, которые игровой режим закрывает при входе (имена процессов, например «onedrive.exe»)
+    pub auto_stop: Vec<String>,
+    /// закрывать ли программы из списка при входе в игровой режим
+    pub auto_stop_on: bool,
+    /// запускать закрытые программы обратно, когда игровой режим выключен
+    pub restart_after: bool,
     pub corner: Corner,
     /// непрозрачность надписи, % (30..100). Меньше — мягче и менее заметно
     pub opacity: u8,
@@ -58,7 +64,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { fps_overlay: true, mode: OverlayMode::Auto, tray: true, corner: Corner::TopLeft, opacity: 80, size: 22 }
+        Config { fps_overlay: true, mode: OverlayMode::Auto, tray: true, auto_stop: Vec::new(), auto_stop_on: true, restart_after: false, corner: Corner::TopLeft, opacity: 80, size: 22 }
     }
 }
 
@@ -95,6 +101,15 @@ mod tests {
         assert!(c.fps_overlay);
         assert_eq!(c.mode, OverlayMode::Auto);
         assert!(c.tray);
+        assert!(c.auto_stop.is_empty() && c.auto_stop_on && !c.restart_after);
+    }
+
+    #[test]
+    fn old_config_without_new_fields_still_loads() {
+        let c: Config = serde_json::from_str(r#"{"fps_overlay": false, "corner": "TopRight", "opacity": 70, "size": 20}"#).unwrap();
+        assert!(!c.fps_overlay);
+        assert_eq!(c.corner, Corner::TopRight);
+        assert!(c.auto_stop.is_empty());
     }
 
     #[test]

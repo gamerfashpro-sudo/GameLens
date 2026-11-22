@@ -12,18 +12,19 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-const CARD: Color32 = Color32::from_rgb(30, 34, 42);
+pub(crate) const CARD: Color32 = Color32::from_rgb(30, 34, 42);
 const PANEL: Color32 = Color32::from_rgb(20, 22, 27);
-const ACCENT: Color32 = Color32::from_rgb(86, 168, 255);
+pub(crate) const ACCENT: Color32 = Color32::from_rgb(86, 168, 255);
 const ORANGE: Color32 = Color32::from_rgb(255, 160, 60);
-const OK: Color32 = Color32::from_rgb(76, 195, 138);
-const WARN: Color32 = Color32::from_rgb(242, 184, 75);
-const BAD: Color32 = Color32::from_rgb(255, 90, 54);
-const MUTED: Color32 = Color32::from_rgb(140, 148, 162);
+pub(crate) const OK: Color32 = Color32::from_rgb(76, 195, 138);
+pub(crate) const WARN: Color32 = Color32::from_rgb(242, 184, 75);
+pub(crate) const BAD: Color32 = Color32::from_rgb(255, 90, 54);
+pub(crate) const MUTED: Color32 = Color32::from_rgb(140, 148, 162);
 
 #[derive(PartialEq, Clone, Copy)]
 enum Tab {
     Live,
+    Procs,
     Sessions,
     Settings,
 }
@@ -60,6 +61,7 @@ pub struct App {
     rights_msg: Arc<Mutex<String>>,
     rtss_ok: bool,
     rtss_checked: Instant,
+    procs: Option<crate::proc_ui::ProcView>,
 }
 
 fn sys_info() -> SysInfo {
@@ -84,6 +86,7 @@ impl App {
             }
         });
         let tab = match std::env::var("GAMELENS_TAB").as_deref() {
+            Ok("procs") => Tab::Procs,
             Ok("sessions") => Tab::Sessions,
             Ok("settings") => Tab::Settings,
             _ => Tab::Live,
@@ -112,6 +115,7 @@ impl App {
             rights_msg: Arc::new(Mutex::new(String::new())),
             rtss_ok: false,
             rtss_checked: Instant::now() - Duration::from_secs(10),
+            procs: None,
         };
         a.refresh_sessions();
         a
@@ -237,7 +241,8 @@ impl App {
             ui.columns(2, |cols| {
                 card(&mut cols[0], |ui| {
                     ui.label(RichText::new("Самые тяжёлые процессы").strong());
-                    ui.label(RichText::new("доля от всего процессора").small().color(MUTED));
+                    ui.label(RichText::new("число справа: доля от всего процессора; шкала сравнивает процессы между собой").small().color(MUTED));
+                    let top_cpu = l.top.iter().map(|p| p.cpu).fold(5.0f32, f32::max);
                     for p in &l.top {
                         ui.horizontal(|ui| {
                             let mut name = p.name.clone();
@@ -245,8 +250,15 @@ impl App {
                                 name = name.chars().take(25).collect::<String>() + "…";
                             }
                             let name_text = if p.name == l.fg { RichText::new(format!("{name}  (активное окно)")).color(ACCENT) } else { RichText::new(name) };
-                            ui.allocate_ui_with_layout(Vec2::new(210.0, 18.0), egui::Layout::left_to_right(egui::Align::Center), |ui| ui.label(name_text));
-                            ui.add(egui::ProgressBar::new((p.cpu / 100.0).clamp(0.0, 1.0)).desired_width(150.0).text(format!("{:.1}%", p.cpu)));
+                            ui.allocate_ui_with_layout(Vec2::new(210.0, 18.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                ui.set_min_width(210.0);
+                                ui.label(name_text)
+                            });
+                                                        slim_bar(ui, 130.0, 8.0, p.cpu / top_cpu, load_color(p.cpu * 3.0));
+                            ui.allocate_ui_with_layout(Vec2::new(52.0, 18.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.set_min_width(52.0);
+                                ui.label(format!("{:.1}%", p.cpu))
+                            });
                             ui.label(RichText::new(format!("{} МБ", p.mem_mb)).color(MUTED));
                         });
                     }
@@ -259,7 +271,7 @@ impl App {
                     egui::Grid::new("cores").num_columns(8).spacing([8.0, 6.0]).show(ui, |ui| {
                         for (i, c) in l.cpu_cores.iter().enumerate() {
                             ui.label(RichText::new(format!("{i}")).small().color(MUTED));
-                            ui.add(egui::ProgressBar::new(*c as f32 / 100.0).desired_width(64.0).desired_height(10.0).fill(load_color(*c as f32)));
+                            slim_bar(ui, 64.0, 8.0, *c as f32 / 100.0, load_color(*c as f32));
                             if (i + 1) % 4 == 0 {
                                 ui.end_row();
                             }
@@ -284,7 +296,7 @@ impl App {
                 ui.label(RichText::new("Как пользоваться").strong());
                 ui.label("1. Поставь галочку «Игровой режим» вверху: окно закроется, а запись пойдёт в фоне.");
                 ui.label("2. Играй. Если заметишь фризы или просадки, запомни время.");
-                ui.label("3. Запусти GameLens ещё раз (ярлык на рабочем столе, см. «Настройки»), сними галочку и открой «Записи».");
+                ui.label("3. Вернуться можно кликом по значку GameLens в трее или через ярлык на рабочем столе (см. «Настройки»): сними галочку и открой «Записи».");
             });
 
             charts_grid(ui, &v, &[], None, "live");
@@ -416,6 +428,7 @@ impl App {
                     self.rtss_checked = Instant::now();
                 }
                 let before = self.cfg.clone();
+                ui.spacing_mut().slider_width = 260.0;
                 ui.checkbox(&mut self.cfg.fps_overlay, "Показывать FPS в игровом режиме");
                 ui.horizontal(|ui| {
                     ui.label("Чем рисовать:");
@@ -526,7 +539,7 @@ impl App {
 
 // ───────────────────────── вспомогательные виджеты ─────────────────────────
 
-fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+pub(crate) fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     egui::Frame::new()
         .fill(CARD)
         .corner_radius(10)
@@ -551,7 +564,7 @@ fn banner(ui: &mut egui::Ui, color: Color32, title: &str, text: &str) {
         });
 }
 
-fn load_color(pct: f32) -> Color32 {
+pub(crate) fn load_color(pct: f32) -> Color32 {
     if pct >= 90.0 {
         BAD
     } else if pct >= 70.0 {
@@ -577,7 +590,20 @@ fn info_row(ui: &mut egui::Ui, k: &str, v: &str) {
     });
 }
 
-fn stat_card(ui: &mut egui::Ui, w: f32, title: &str, value: &str, color: Color32) {
+/// Тонкая закруглённая шкала без «точки» при нулевом значении.
+pub(crate) fn slim_bar(ui: &mut egui::Ui, w: f32, h: f32, frac: f32, color: Color32) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(w, h), egui::Sense::hover());
+    let r = h / 2.0;
+    ui.painter().rect_filled(rect, r, Color32::from_rgb(44, 50, 62));
+    let f = frac.clamp(0.0, 1.0);
+    if f > 0.01 {
+        let mut fill = rect;
+        fill.set_width((w * f).max(h)); // не уже высоты, иначе скругление ломается
+        ui.painter().rect_filled(fill, r, color);
+    }
+}
+
+pub(crate) fn stat_card(ui: &mut egui::Ui, w: f32, title: &str, value: &str, color: Color32) {
     egui::Frame::new().fill(CARD).corner_radius(10).inner_margin(egui::Margin::same(12)).show(ui, |ui| {
         ui.set_width(w - 24.0);
         ui.vertical(|ui| {
@@ -855,7 +881,7 @@ impl eframe::App for App {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("GameLens").size(22.0).strong().color(ACCENT));
                 ui.add_space(12.0);
-                for (t, name) in [(Tab::Live, "Сейчас"), (Tab::Sessions, "Записи"), (Tab::Settings, "Настройки")] {
+                for (t, name) in [(Tab::Live, "Сейчас"), (Tab::Procs, "Программы"), (Tab::Sessions, "Записи"), (Tab::Settings, "Настройки")] {
                     if ui.selectable_label(self.tab == t, RichText::new(name).size(16.0)).clicked() {
                         self.tab = t;
                         if t == Tab::Sessions {
@@ -889,6 +915,10 @@ impl eframe::App for App {
 
         egui::CentralPanel::default().show(ui, |ui| match self.tab {
             Tab::Live => self.tab_live(ui, ctx),
+            Tab::Procs => {
+                let App { procs, cfg, .. } = self;
+                procs.get_or_insert_with(crate::proc_ui::ProcView::new).show(ui, cfg);
+            }
             Tab::Sessions => self.tab_sessions(ui),
             Tab::Settings => self.tab_settings(ui),
         });
