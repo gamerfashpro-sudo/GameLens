@@ -29,3 +29,7 @@ pub fn recorder_running() -> bool {
     );
     sys.process(sysinfo::Pid::from_u32(pid)).is_some()
 }
+
+pub fn config_file() -> PathBuf {
+    data_dir().join("config.json")
+}

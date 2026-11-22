@@ -2,6 +2,8 @@ use crate::advice::{self, Severity};
 use crate::analyze;
 use crate::collector::Collector;
 use crate::model::{Incident, Sample};
+use crate::config::{Config, Corner};
+use crate::fps::{self, TraceStatus};
 use crate::{paths, store, update};
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
 use egui_plot::{Line, Plot, PlotPoints, VLine};
@@ -53,6 +55,9 @@ pub struct App {
     info: SysInfo,
     confirm_delete: bool,
     note: String,
+    cfg: Config,
+    rights: Option<TraceStatus>,
+    rights_msg: Arc<Mutex<String>>,
 }
 
 fn sys_info() -> SysInfo {
@@ -100,6 +105,9 @@ impl App {
             info: sys_info(),
             confirm_delete: false,
             note: String::new(),
+            cfg: Config::load(),
+            rights: None,
+            rights_msg: Arc::new(Mutex::new(String::new())),
         };
         a.refresh_sessions();
         a
@@ -334,7 +342,7 @@ impl App {
             if findings.is_empty() {
                 card(ui, |ui| {
                     ui.label(RichText::new("Проблем не найдено").strong().color(OK));
-                    ui.label("За время записи не было зависаний системы, перегрузки процессора, памяти или диска. Если фризы в игре всё равно были, причина, скорее всего, внутри самой игры (оптимизация, шейдеры) или в сети. GameLens измеряет систему, а не FPS игры.");
+                    ui.label("За время записи не было зависаний системы, перегрузки процессора, памяти или диска. Если фризы в игре всё равно были, причина, скорее всего, внутри самой игры (оптимизация, шейдеры) или в сети.");
                 });
             } else {
                 card(ui, |ui| {
@@ -376,6 +384,52 @@ impl App {
                 }
                 if !self.note.is_empty() {
                     ui.label(RichText::new(&self.note).color(MUTED));
+                }
+            });
+            card(ui, |ui| {
+                ui.label(RichText::new("FPS поверх игры").strong());
+                ui.label(RichText::new("Работает в игровом режиме. Белая мягкая надпись в углу экрана над игрой в оконном режиме или в «окне без рамки». В настоящем полноэкранном режиме Windows не позволяет рисовать поверх игры.").small().color(MUTED));
+                let before = self.cfg.clone();
+                ui.checkbox(&mut self.cfg.fps_overlay, "Показывать FPS в игровом режиме");
+                ui.horizontal(|ui| {
+                    ui.label("Угол экрана:");
+                    for c in [Corner::TopLeft, Corner::TopRight, Corner::BottomLeft, Corner::BottomRight] {
+                        ui.selectable_value(&mut self.cfg.corner, c, c.label());
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Яркость надписи:");
+                    ui.add(egui::Slider::new(&mut self.cfg.opacity, 30..=100).suffix("%"));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Размер:");
+                    ui.add(egui::Slider::new(&mut self.cfg.size, 14..=40).suffix(" px"));
+                });
+                if self.cfg != before {
+                    self.cfg.save();
+                }
+                ui.label(RichText::new("Изменения применяются при следующем включении игрового режима.").small().color(MUTED));
+                ui.separator();
+                ui.label(RichText::new("Права на измерение FPS").strong());
+                ui.label(RichText::new("Windows даёт читать события показа кадров только администратору или членам группы «Performance Log Users». Достаточно выдать права один раз, потом нужно выйти из Windows и зайти снова.").small().color(MUTED));
+                ui.horizontal(|ui| {
+                    if ui.button("Проверить права").clicked() {
+                        self.rights = Some(fps::probe_rights());
+                    }
+                    if ui.button("Выдать права (запрос администратора)").clicked() {
+                        grant_fps_rights(self.rights_msg.clone());
+                    }
+                });
+                match self.rights {
+                    Some(TraceStatus::Ok) => { ui.colored_label(OK, "Права есть: FPS будет измеряться."); }
+                    Some(TraceStatus::NoRights) => { ui.colored_label(WARN, "Прав пока нет. Нажми «Выдать права», подтверди запрос Windows, потом перезайди в Windows."); }
+                    Some(TraceStatus::Unsupported) => { ui.colored_label(MUTED, "Измерение FPS работает только в Windows."); }
+                    Some(TraceStatus::Error(c)) => { ui.colored_label(BAD, format!("Не удалось проверить (код {c}).")); }
+                    None => {}
+                }
+                let m = self.rights_msg.lock().map(|m| m.clone()).unwrap_or_default();
+                if !m.is_empty() {
+                    ui.label(RichText::new(m).color(MUTED));
                 }
             });
             card(ui, |ui| {
@@ -422,9 +476,10 @@ impl App {
             });
             card(ui, |ui| {
                 ui.label(RichText::new("Как это работает и чего не умеет").strong());
-                ui.label("• В игровом режиме работает отдельный маленький процесс без окна: раз в 2 секунды он записывает загрузку процессора, памяти, диска, видеокарты и список самых тяжёлых программ.");
+                ui.label("• В игровом режиме работает отдельный маленький процесс без окна: раз в 2 секунды он записывает загрузку процессора, памяти, диска, видеокарты, FPS и список самых тяжёлых программ.");
                 ui.label("• Фризы ловятся специальным таймером: если система «стояла» дольше 50 мс, это попадает в запись.");
-                ui.label("• GameLens не измеряет FPS и время кадра внутри игры: он находит причины на стороне системы. Если причина внутри игры, программа честно напишет, что не нашла объяснения.");
+                ui.label("• FPS игры читается из системных событий показа кадров (ETW), без внедрения в игру. Для этого нужны права (см. выше). Если прав нет, всё остальное работает, просто без FPS.");
+                ui.label("• Причины фризов ищутся на стороне системы. Если причина внутри самой игры, программа честно напишет, что не нашла объяснения.");
                 ui.label("• Температуры процессора и видеокарты не измеряются: для этого нужны драйверы, которые GameLens намеренно не ставит.");
             });
         });
@@ -621,6 +676,40 @@ fn create_shortcut() -> String {
     }
 }
 
+/// Добавляет текущего пользователя в группу «Performance Log Users» (SID S-1-5-32-559, не зависит от языка Windows).
+/// Windows покажет запрос администратора. Работает в отдельном потоке, чтобы окно не зависало.
+fn grant_fps_rights(msg: Arc<Mutex<String>>) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let user = format!("{}\\{}", std::env::var("USERDOMAIN").unwrap_or_default(), std::env::var("USERNAME").unwrap_or_default());
+        let inner = format!("Add-LocalGroupMember -SID S-1-5-32-559 -Member '{}'", user.replace('\'', "''"));
+        let outer = format!(
+            "Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '-NoProfile','-Command','{}'",
+            inner.replace('\'', "''")
+        );
+        if let Ok(mut m) = msg.lock() {
+            *m = "Ожидаю подтверждения запроса Windows…".into();
+        }
+        std::thread::spawn(move || {
+            let ok = std::process::Command::new("powershell").args(["-NoProfile", "-Command", &outer]).creation_flags(0x0800_0000).status().map(|s| s.success()).unwrap_or(false);
+            if let Ok(mut m) = msg.lock() {
+                *m = if ok {
+                    "Готово. Теперь выйди из Windows и зайди снова (или перезагрузи ПК), потом нажми «Проверить права».".into()
+                } else {
+                    "Запрос отклонён или не удался. Права не выданы.".into()
+                };
+            }
+        });
+    }
+    #[cfg(not(windows))]
+    {
+        if let Ok(mut m) = msg.lock() {
+            *m = "Доступно только в Windows.".into();
+        }
+    }
+}
+
 fn open_folder(p: &std::path::Path) {
     #[cfg(windows)]
     let _ = std::process::Command::new("explorer").arg(p).spawn();
@@ -643,10 +732,14 @@ fn series(samples: &[Sample], f: impl Fn(&Sample) -> Option<f32>) -> Vec<[f64; 2
 }
 
 fn build_charts(s: &[Sample]) -> Vec<ChartSpec> {
-    let mut v = vec![
+    let mut v = Vec::new();
+    if s.iter().any(|x| x.fps.is_some()) {
+        v.push(ChartSpec { id: "fps", title: "FPS игры", hint: "Провалы FPS сравни с остальными графиками: рядом с провалом обычно видна причина (процессор, память, диск).", y_max: None, lines: vec![("FPS", series(s, |x| x.fps), Color32::from_rgb(235, 238, 245))] });
+    }
+    v.extend(vec![
         ChartSpec { id: "cpu", title: "Процессор, %", hint: "Если линия долго у 100% — процессор не справляется. Нижняя линия — самое загруженное ядро.", y_max: Some(100.0), lines: vec![("Общая загрузка", series(s, |x| Some(x.cpu_total)), ACCENT), ("Самое загруженное ядро", series(s, |x| Some(x.max_core() as f32)), ORANGE)] },
         ChartSpec { id: "ram", title: "Оперативная память, %", hint: "Выше ~90% Windows начинает выгружать данные на диск — отсюда фризы.", y_max: Some(100.0), lines: vec![("Память", series(s, |x| Some(x.mem_pct())), OK)] },
-    ];
+    ]);
     if s.iter().any(|x| x.gpu_pct.is_some()) {
         v.push(ChartSpec { id: "gpu", title: "Видеокарта (3D), %", hint: "Около 100% при свободном процессоре — упор в видеокарту.", y_max: Some(100.0), lines: vec![("Видеокарта", series(s, |x| x.gpu_pct), Color32::from_rgb(190, 130, 255))] });
     }
