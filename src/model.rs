@@ -32,7 +32,7 @@ pub struct Sample {
     /// средняя задержка диска на операцию, мс
     #[serde(default)]
     pub disk_lat_ms: Option<f32>,
-    /// % от максимальной частоты CPU (падение при нагрузке = троттлинг)
+    /// % от БАЗОВОЙ частоты CPU: выше 100 = турбо, ниже 100 при нагрузке = троттлинг
     #[serde(default)]
     pub cpu_freq_pct: Option<f32>,
     #[serde(default)]
@@ -76,7 +76,7 @@ pub enum Cause {
     DiskSlow { lat_ms: f32, busy_pct: f32 },
     /// Драйверы съели время обработкой прерываний
     DriverLatency { dpc_pct: f32 },
-    /// Частота CPU упала при нагрузке — перегрев или лимит питания
+    /// Частота CPU упала ниже базовой при нагрузке — перегрев или лимит питания
     CpuThrottle { freq_pct: f32 },
     /// Активная подкачка (страницы читаются с диска)
     HardPageFaults { pages_per_s: f32 },
