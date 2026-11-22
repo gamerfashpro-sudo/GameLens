@@ -37,6 +37,8 @@ pub struct App {
     styled: bool,
     tab: Tab,
     recording: bool,
+    /// stop-файл отправлен, ждём, пока фоновый процесс реально завершится
+    stopping: bool,
     last_rec_check: Instant,
     collector: Option<Collector>,
     live: VecDeque<Sample>,
@@ -83,6 +85,7 @@ impl App {
             styled: false,
             tab,
             recording: paths::recorder_running(),
+            stopping: false,
             last_rec_check: Instant::now(),
             collector: None,
             live: VecDeque::new(),
@@ -162,18 +165,15 @@ impl App {
     fn stop_game_mode(&mut self) {
         let _ = std::fs::create_dir_all(paths::data_dir());
         let _ = std::fs::write(paths::stop_file(), b"1");
-        self.recording = false;
+        self.stopping = true;
         self.collector = None;
-        std::thread::sleep(Duration::from_millis(300));
-        self.refresh_sessions();
-        self.selected = None;
     }
 
     // ───────────────────────── вкладка «Сейчас» ─────────────────────────
     fn tab_live(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        if self.recording {
+        if self.recording || self.stopping {
             card(ui, |ui| {
-                ui.heading("Идёт фоновая запись");
+                ui.heading(if self.stopping { "Останавливаю запись…" } else { "Идёт фоновая запись" });
                 ui.label("Игровой режим включён: окно ничего не измеряет и не мешает игре, записью занимается маленький фоновый процесс.");
                 ui.label(RichText::new("Чтобы закончить, сними галочку «Игровой режим» вверху. Потом открой вкладку «Записи»: там будет разбор.").color(MUTED));
             });
@@ -260,7 +260,7 @@ impl App {
                     info_row(ui, "Память", &self.info.ram);
                     info_row(ui, "Система", &self.info.os);
                     if let Some(f) = l.cpu_freq_pct {
-                        info_row(ui, "Частота CPU", &format!("{f:.0}% от максимума"));
+                        info_row(ui, "Частота CPU", &if f > 100.5 { format!("{f:.0}% от базовой (турбо)") } else { format!("{f:.0}% от базовой") });
                     }
                     if let Some(d) = l.dpc_pct {
                         info_row(ui, "Драйверы (DPC)", &format!("{d:.1}% времени"));
@@ -654,7 +654,7 @@ fn build_charts(s: &[Sample]) -> Vec<ChartSpec> {
         v.push(ChartSpec { id: "disk", title: "Диск: время ответа, мс", hint: "Больше 50 мс — диск тормозит, игра ждёт данные.", y_max: None, lines: vec![("Задержка диска", series(s, |x| x.disk_lat_ms), ORANGE)] });
     }
     if s.iter().any(|x| x.cpu_freq_pct.is_some()) {
-        v.push(ChartSpec { id: "freq", title: "Частота процессора, % от максимума", hint: "Провал при высокой нагрузке — перегрев или лимит питания (троттлинг).", y_max: Some(100.0), lines: vec![("Частота", series(s, |x| x.cpu_freq_pct), ACCENT)] });
+        v.push(ChartSpec { id: "freq", title: "Частота процессора, % от базовой", hint: "Выше 100% — процессор разогнался сам (турбо), это нормально. Провал ниже 100% при высокой нагрузке — перегрев или лимит питания.", y_max: None, lines: vec![("Частота", series(s, |x| x.cpu_freq_pct), ACCENT)] });
     }
     if s.iter().any(|x| x.dpc_pct.is_some()) {
         v.push(ChartSpec { id: "dpc", title: "Драйверы (DPC), % времени", hint: "Больше 10–15% — какой-то драйвер перегружает процессор.", y_max: Some(20.0), lines: vec![("DPC", series(s, |x| x.dpc_pct), BAD)] });
@@ -704,7 +704,17 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = &ui.ctx().clone();
         self.style(ctx);
-        if self.last_rec_check.elapsed() > Duration::from_secs(2) {
+        if self.stopping {
+            // пока рекордер не завершился, состояние не перечитываем: иначе галочка включится обратно
+            if paths::recorder_running() {
+                ctx.request_repaint_after(Duration::from_millis(150));
+            } else {
+                self.stopping = false;
+                self.recording = false;
+                self.refresh_sessions();
+                self.selected = None;
+            }
+        } else if self.last_rec_check.elapsed() > Duration::from_secs(2) {
             self.recording = paths::recorder_running();
             self.last_rec_check = Instant::now();
         }
@@ -723,13 +733,17 @@ impl eframe::App for App {
                     }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let mut gm = self.recording;
-                    if ui.checkbox(&mut gm, RichText::new("Игровой режим").strong()).on_hover_text("Окно закроется, запись пойдёт в фоне без нагрузки на игру").changed() {
+                    let mut gm = self.recording || self.stopping;
+                    let resp = ui.add_enabled(!self.stopping, egui::Checkbox::new(&mut gm, RichText::new("Игровой режим").strong()));
+                    if resp.on_hover_text("Окно закроется, запись пойдёт в фоне без нагрузки на игру").changed() {
                         if gm {
                             self.start_game_mode(ctx);
                         } else {
                             self.stop_game_mode();
                         }
+                    }
+                    if self.stopping {
+                        ui.label(RichText::new("Останавливаю запись…").color(WARN));
                     }
                     let has_upd = self.upd.lock().unwrap().is_some();
                     if has_upd {

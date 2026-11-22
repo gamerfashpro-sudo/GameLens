@@ -16,10 +16,13 @@ pub fn run() {
     let path = paths::sessions_dir().join(name);
     let Ok(mut w) = store::Writer::create(&path) else { return };
     let mut c = Collector::new(5);
-    loop {
-        std::thread::sleep(Duration::from_millis(2000));
-        if paths::stop_file().exists() {
-            break;
+    // замер раз в 2 с, но сигнал остановки проверяем каждые 250 мс, чтобы окно не ждало дольше секунды
+    'rec: loop {
+        for _ in 0..8 {
+            std::thread::sleep(Duration::from_millis(250));
+            if paths::stop_file().exists() {
+                break 'rec;
+            }
         }
         if w.write(&c.sample()).is_err() {
             break;
