@@ -2,7 +2,7 @@ use crate::config::{Config, OverlayMode};
 use crate::fps::{FpsMeter, TraceStatus};
 use crate::overlay::Overlay;
 use crate::rtss::Rtss;
-use crate::{collector::Collector, paths, perf, store};
+use crate::{collector::Collector, paths, perf, procs, store};
 use std::time::Duration;
 
 /// Фоновый рекордер для игрового режима: без окна и без истории в памяти.
@@ -23,6 +23,9 @@ pub fn run() {
 
     // FPS и надпись поверх игры (если включено в настройках)
     let cfg = Config::load();
+    // закрываем программы, которые пользователь отметил как ненужные во время игры
+    let stopped = if cfg.auto_stop_on { procs::stop_for_game(&cfg.auto_stop, perf::foreground_pid()) } else { vec![] };
+    procs::save_stopped(&stopped);
     let mut display = Display::new(cfg.clone());
     let tray = if cfg.tray { Some(crate::tray::Tray::spawn()) } else { None };
     // FPS берём из RTSS, если он запущен: это ничего не стоит и не требует прав. Если RTSS нет, считаем
@@ -95,6 +98,9 @@ pub fn run() {
     display.show(Msg::Hidden);
     drop(display); // отдаёт запись в RTSS
     drop(tray); // убирает значок из трея
+    if cfg.restart_after {
+        procs::restart(&stopped); // возвращаем то, что закрыли при входе
+    }
     drop(meter); // останавливает ETW-сессию
     let _ = std::fs::remove_file(paths::stop_file());
     let _ = std::fs::remove_file(paths::pid_file());

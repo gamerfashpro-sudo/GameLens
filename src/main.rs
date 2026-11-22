@@ -11,6 +11,8 @@ mod overlay;
 mod model;
 mod paths;
 mod perf;
+mod proc_ui;
+mod procs;
 mod recorder;
 mod rtss;
 mod store;
