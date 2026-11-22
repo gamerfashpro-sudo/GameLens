@@ -6,12 +6,15 @@ mod app;
 mod collector;
 mod config;
 mod fps;
+mod instance;
 mod overlay;
 mod model;
 mod paths;
 mod perf;
 mod recorder;
+mod rtss;
 mod store;
+mod tray;
 mod update;
 
 use eframe::egui;
@@ -21,6 +24,11 @@ fn main() -> eframe::Result<()> {
     // Игровой режим: отдельный процесс без окна и без графики
     if args.iter().any(|a| a == "--record") {
         recorder::run();
+        return Ok(());
+    }
+    // одно окно: повторный запуск (ярлык, значок в трее) показывает уже открытое
+    if !instance::acquire(args.iter().any(|a| a == "--restarted")) {
+        instance::focus_existing();
         return Ok(());
     }
     let icon = egui::IconData { rgba: include_bytes!("../assets/icon128.rgba").to_vec(), width: 128, height: 128 };
