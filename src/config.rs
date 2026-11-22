@@ -19,12 +19,36 @@ impl Corner {
     }
 }
 
+/// Чем рисовать надпись FPS.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum OverlayMode {
+    /// RTSS, если он запущен (работает в любом режиме игры), иначе своё окно
+    Auto,
+    /// всегда своё окно: только оконный режим и «окно без рамки»
+    Own,
+    /// только через RTSS
+    Rtss,
+}
+
+impl OverlayMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            OverlayMode::Auto => "Автоматически",
+            OverlayMode::Own => "Своё окно",
+            OverlayMode::Rtss => "Через RTSS",
+        }
+    }
+}
+
 /// Настройки программы (файл config.json в папке данных).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct Config {
     /// показывать FPS поверх игры в игровом режиме
     pub fps_overlay: bool,
+    pub mode: OverlayMode,
+    /// значок в трее в игровом режиме (быстрый возврат к программе)
+    pub tray: bool,
     pub corner: Corner,
     /// непрозрачность надписи, % (30..100). Меньше — мягче и менее заметно
     pub opacity: u8,
@@ -34,7 +58,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { fps_overlay: true, corner: Corner::TopLeft, opacity: 80, size: 22 }
+        Config { fps_overlay: true, mode: OverlayMode::Auto, tray: true, corner: Corner::TopLeft, opacity: 80, size: 22 }
     }
 }
 
@@ -69,6 +93,8 @@ mod tests {
         assert_eq!(c.opacity, 55);
         assert_eq!(c.corner, Corner::TopLeft);
         assert!(c.fps_overlay);
+        assert_eq!(c.mode, OverlayMode::Auto);
+        assert!(c.tray);
     }
 
     #[test]

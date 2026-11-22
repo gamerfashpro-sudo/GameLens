@@ -56,7 +56,7 @@ pub fn apply(f: &Found) -> Result<(), String> {
         let _ = std::fs::rename(&old, &exe); // откат
         return Err(e.to_string());
     }
-    std::process::Command::new(&exe).spawn().map_err(|e| e.to_string())?;
+    std::process::Command::new(&exe).arg("--restarted").spawn().map_err(|e| e.to_string())?;
     Ok(())
 }
 

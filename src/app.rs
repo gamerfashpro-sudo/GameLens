@@ -2,7 +2,7 @@ use crate::advice::{self, Severity};
 use crate::analyze;
 use crate::collector::Collector;
 use crate::model::{Incident, Sample};
-use crate::config::{Config, Corner};
+use crate::config::{Config, Corner, OverlayMode};
 use crate::fps::{self, TraceStatus};
 use crate::{paths, store, update};
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
@@ -58,6 +58,8 @@ pub struct App {
     cfg: Config,
     rights: Option<TraceStatus>,
     rights_msg: Arc<Mutex<String>>,
+    rtss_ok: bool,
+    rtss_checked: Instant,
 }
 
 fn sys_info() -> SysInfo {
@@ -108,6 +110,8 @@ impl App {
             cfg: Config::load(),
             rights: None,
             rights_msg: Arc::new(Mutex::new(String::new())),
+            rtss_ok: false,
+            rtss_checked: Instant::now() - Duration::from_secs(10),
         };
         a.refresh_sessions();
         a
@@ -388,9 +392,25 @@ impl App {
             });
             card(ui, |ui| {
                 ui.label(RichText::new("FPS поверх игры").strong());
-                ui.label(RichText::new("Работает в игровом режиме. Белая мягкая надпись в углу экрана над игрой в оконном режиме или в «окне без рамки». В настоящем полноэкранном режиме Windows не позволяет рисовать поверх игры.").small().color(MUTED));
+                ui.label(RichText::new("Работает в игровом режиме. Своё окно GameLens видно над игрой в оконном режиме и в «окне без рамки». В настоящем полноэкранном режиме Windows не даёт рисовать обычным окнам, там надпись выводит RivaTuner (RTSS, ставится вместе с MSI Afterburner): GameLens только передаёт ему текст и ничего не внедряет в игру.").small().color(MUTED));
+                if self.rtss_checked.elapsed() > Duration::from_secs(3) {
+                    self.rtss_ok = crate::rtss::available();
+                    self.rtss_checked = Instant::now();
+                }
                 let before = self.cfg.clone();
                 ui.checkbox(&mut self.cfg.fps_overlay, "Показывать FPS в игровом режиме");
+                ui.horizontal(|ui| {
+                    ui.label("Чем рисовать:");
+                    for m in [OverlayMode::Auto, OverlayMode::Own, OverlayMode::Rtss] {
+                        ui.selectable_value(&mut self.cfg.mode, m, m.label());
+                    }
+                });
+                if self.rtss_ok {
+                    ui.colored_label(OK, "RTSS найден: в режиме «Автоматически» надпись выводится через него, в любом режиме игры. Её вид (цвет, размер, угол) задаётся в RTSS.");
+                } else {
+                    ui.colored_label(MUTED, "RTSS сейчас не запущен: пока рисуется своим окном (оконный режим и «окно без рамки»). Для полного экрана запусти MSI Afterburner / RTSS перед игрой.");
+                }
+                ui.checkbox(&mut self.cfg.tray, "Значок в трее в игровом режиме (клик возвращает в программу)");
                 ui.horizontal(|ui| {
                     ui.label("Угол экрана:");
                     for c in [Corner::TopLeft, Corner::TopRight, Corner::BottomLeft, Corner::BottomRight] {
