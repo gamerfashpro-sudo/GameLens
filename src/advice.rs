@@ -227,6 +227,33 @@ pub struct Summary {
     pub stall_count: usize,
 }
 
+/// Статистика FPS за запись.
+#[derive(Debug, PartialEq)]
+pub struct FpsStats {
+    pub avg: f32,
+    /// среднее по самым плохим 1% замеров: показывает статтеры, которые среднее скрывает
+    pub low1: f32,
+    pub min: f32,
+}
+
+impl FpsStats {
+    /// Насколько 1% low хуже среднего (0..1). Больше 0.4 — игра идёт рывками.
+    pub fn drop_ratio(&self) -> f32 {
+        if self.avg <= 0.0 { 0.0 } else { (1.0 - self.low1 / self.avg).clamp(0.0, 1.0) }
+    }
+}
+
+/// None, если FPS почти не записан (меньше 5 замеров: игра не отдавала кадры или не было прав).
+pub fn fps_stats(samples: &[Sample]) -> Option<FpsStats> {
+    let mut v: Vec<f32> = samples.iter().filter_map(|s| s.fps).filter(|f| f.is_finite() && *f > 0.0).collect();
+    if v.len() < 5 {
+        return None;
+    }
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let k = ((v.len() as f32 * 0.01).ceil() as usize).max(1);
+    Some(FpsStats { avg: v.iter().sum::<f32>() / v.len() as f32, low1: v[..k].iter().sum::<f32>() / k as f32, min: v[0] })
+}
+
 pub fn summarize(samples: &[Sample], incidents: &[Incident]) -> Summary {
     let n = samples.len().max(1) as f32;
     let avg_cpu = samples.iter().map(|s| s.cpu_total).sum::<f32>() / n;
@@ -271,6 +298,43 @@ mod tests {
 
     fn inc(peak: u32, causes: Vec<Cause>) -> Incident {
         Incident { start_ms: 0, end_ms: 1000, peak_stall_ms: peak, causes }
+    }
+
+    fn fps_samples(v: &[Option<f32>]) -> Vec<Sample> {
+        v.iter().enumerate().map(|(i, f)| Sample { t_ms: i as u64 * 2000, fps: *f, ..Default::default() }).collect()
+    }
+
+    #[test]
+    fn fps_stats_need_enough_data() {
+        assert_eq!(fps_stats(&fps_samples(&[None; 50])), None);
+        assert_eq!(fps_stats(&fps_samples(&[Some(60.0); 4])), None);
+    }
+
+    #[test]
+    fn fps_stats_smooth_game_has_low1_near_average() {
+        let f = fps_stats(&fps_samples(&[Some(60.0); 100])).unwrap();
+        assert_eq!((f.avg, f.low1, f.min), (60.0, 60.0, 60.0));
+        assert_eq!(f.drop_ratio(), 0.0);
+    }
+
+    #[test]
+    fn fps_stats_one_percent_low_catches_stutter_average_hides() {
+        // 99 замеров по 100 и один провал до 20: среднее ~99, а 1% low = 20
+        let mut v = vec![Some(100.0); 99];
+        v.push(Some(20.0));
+        let f = fps_stats(&fps_samples(&v)).unwrap();
+        assert!((f.avg - 99.2).abs() < 0.01);
+        assert_eq!(f.low1, 20.0);
+        assert_eq!(f.min, 20.0);
+        assert!(f.drop_ratio() > 0.7);
+    }
+
+    #[test]
+    fn fps_stats_ignores_missing_and_junk() {
+        let mut v = vec![None, Some(f32::NAN), Some(0.0)];
+        v.extend(vec![Some(50.0); 10]);
+        let f = fps_stats(&fps_samples(&v)).unwrap();
+        assert_eq!(f.avg, 50.0);
     }
 
     #[test]

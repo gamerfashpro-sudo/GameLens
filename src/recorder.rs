@@ -25,20 +25,12 @@ pub fn run() {
     let cfg = Config::load();
     let mut display = Display::new(cfg.clone());
     let tray = if cfg.tray { Some(crate::tray::Tray::spawn()) } else { None };
-    let mut meter = None;
+    // FPS берём из RTSS, если он запущен: это ничего не стоит и не требует прав. Если RTSS нет, считаем
+    // сами по событиям Windows (ETW), но только пока RTSS не появился.
+    let mut meter: Option<FpsMeter> = None;
+    let mut etw_tried = false;
+    let mut rtss_miss = 0u32; // полусекунд подряд, когда RTSS запущен, но FPS игры не отдал
     let mut note_ticks = 0u32; // сколько полусекунд показывать сообщение о проблеме
-    if cfg.fps_overlay {
-        match FpsMeter::start() {
-            Ok(m) => meter = Some(m),
-            Err(e) => {
-                note_ticks = 20;
-                display.show(match e {
-                    TraceStatus::NoRights => Msg::NoRights,
-                    _ => Msg::Unavailable,
-                });
-            }
-        }
-    }
     let mut last_fps: Option<f32> = None;
 
     'rec: loop {
@@ -48,8 +40,42 @@ pub fn run() {
                 break 'rec;
             }
             if tick % 2 == 1 {
+                let fg = perf::foreground_pid();
+                display.tick();
+                let from_rtss = display.rtss_fps(fg);
+                if from_rtss.is_some() {
+                    // RTSS даёт FPS: своя трассировка не нужна и снимается; при его пропаже попробуем заново
+                    meter = None;
+                    etw_tried = false;
+                    rtss_miss = 0;
+                    note_ticks = 0;
+                } else if display.has_rtss() {
+                    rtss_miss += 1; // RTSS запущен, но игру не знает (не подключился к ней)
+                } else {
+                    rtss_miss = 0;
+                }
+                // своя трассировка: если RTSS нет вовсе или он 3 с подряд не видит игру
+                if cfg.fps_overlay && meter.is_none() && !etw_tried && (!display.has_rtss() || rtss_miss >= 6) {
+                    etw_tried = true;
+                    match FpsMeter::start() {
+                        Ok(m) => meter = Some(m),
+                        Err(e) if !display.has_rtss() => {
+                            note_ticks = 20;
+                            display.show(match e {
+                                TraceStatus::NoRights => Msg::NoRights,
+                                _ => Msg::Unavailable,
+                            });
+                        }
+                        Err(_) => {}
+                    }
+                }
                 if let Some(m) = meter.as_mut() {
-                    last_fps = m.poll(perf::foreground_pid());
+                    let from_etw = m.poll(fg);
+                    last_fps = from_rtss.or(from_etw);
+                } else {
+                    last_fps = from_rtss;
+                }
+                if meter.is_some() || display.has_rtss() {
                     // игра не показывает кадры: надпись скрыта
                     display.show(last_fps.map_or(Msg::Hidden, Msg::Fps));
                 } else if note_ticks > 0 {
@@ -96,19 +122,32 @@ impl Display {
         Display { cfg, own: None, rtss: None, wait: 0 }
     }
 
+    /// Раз в полсекунды: ищет RTSS (не чаще раза в ~4 с), если он ещё не подключён.
+    fn tick(&mut self) {
+        if self.rtss.is_none() {
+            if self.wait == 0 {
+                self.rtss = Rtss::connect();
+                self.wait = 8;
+            } else {
+                self.wait -= 1;
+            }
+        }
+    }
+
+    fn has_rtss(&self) -> bool {
+        self.rtss.is_some()
+    }
+
+    /// FPS игры из RTSS (None: RTSS нет, не знает игру или кадры не идут).
+    fn rtss_fps(&mut self, fg: Option<u32>) -> Option<f32> {
+        self.rtss.as_mut().and_then(|r| r.fps(fg))
+    }
+
     fn show(&mut self, m: Msg) {
         if !self.cfg.fps_overlay {
             return;
         }
         if self.cfg.mode != OverlayMode::Own {
-            if self.rtss.is_none() {
-                if self.wait == 0 {
-                    self.rtss = Rtss::connect();
-                    self.wait = 8;
-                } else {
-                    self.wait -= 1;
-                }
-            }
             if let Some(r) = self.rtss.as_mut() {
                 let text = match m {
                     Msg::Fps(f) => format!("{:.0} FPS", f),

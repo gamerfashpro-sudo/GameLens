@@ -341,6 +341,24 @@ impl App {
                 stat_card(ui, w, "Пик памяти", &format!("{:.0}%", sum.peak_mem_pct), load_color(sum.peak_mem_pct));
             });
 
+            // FPS игры за запись (если он измерялся)
+            if let Some(f) = advice::fps_stats(&self.loaded) {
+                ui.add_space(4.0);
+                let w3 = (ui.available_width() - 2.0 * 10.0) / 3.0;
+                let low_color = if f.drop_ratio() > 0.5 { BAD } else if f.drop_ratio() > 0.3 { WARN } else { OK };
+                ui.horizontal(|ui| {
+                    stat_card(ui, w3, "Средний FPS", &format!("{:.0}", f.avg), ACCENT);
+                    stat_card(ui, w3, "1% low (самые плохие кадры)", &format!("{:.0}", f.low1), low_color);
+                    stat_card(ui, w3, "Минимальный FPS", &format!("{:.0}", f.min), low_color);
+                });
+                let note = if f.drop_ratio() > 0.3 {
+                    "1% low сильно ниже среднего: игра идёт рывками, хотя средний FPS может выглядеть хорошо. Посмотри причины ниже и график FPS рядом с остальными."
+                } else {
+                    "1% low близок к среднему: кадры выходят ровно, рывков по FPS нет."
+                };
+                ui.label(RichText::new(note).small().color(MUTED));
+            }
+
             // главные выводы
             let findings = advice::top_findings(&self.incidents);
             if findings.is_empty() {
@@ -431,7 +449,7 @@ impl App {
                 ui.label(RichText::new("Изменения применяются при следующем включении игрового режима.").small().color(MUTED));
                 ui.separator();
                 ui.label(RichText::new("Права на измерение FPS").strong());
-                ui.label(RichText::new("Windows даёт читать события показа кадров только администратору или членам группы «Performance Log Users». Достаточно выдать права один раз, потом нужно выйти из Windows и зайти снова.").small().color(MUTED));
+                ui.label(RichText::new("Нужны только если RTSS не запущен: через RTSS FPS берётся без прав. Windows даёт читать события показа кадров только администратору или членам группы «Performance Log Users». Достаточно выдать права один раз, потом нужно выйти из Windows и зайти снова.").small().color(MUTED));
                 ui.horizontal(|ui| {
                     if ui.button("Проверить права").clicked() {
                         self.rights = Some(fps::probe_rights());
