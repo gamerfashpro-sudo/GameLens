@@ -53,6 +53,9 @@ pub struct App {
     focus: Option<(f64, f64)>,
     upd: Arc<Mutex<Option<update::Found>>>,
     upd_msg: String,
+    /// фоновая проверка обновлений запущена (запускается при первом кадре, когда уже есть контекст окна)
+    upd_started: bool,
+    upd_status: Arc<Mutex<String>>,
     info: SysInfo,
     confirm_delete: bool,
     note: String,
@@ -79,12 +82,6 @@ fn sys_info() -> SysInfo {
 impl App {
     pub fn new() -> Self {
         let upd = Arc::new(Mutex::new(None));
-        let u2 = upd.clone();
-        std::thread::spawn(move || {
-            if let Some(f) = update::check() {
-                *u2.lock().unwrap() = Some(f);
-            }
-        });
         let tab = match std::env::var("GAMELENS_TAB").as_deref() {
             Ok("procs") => Tab::Procs,
             Ok("sessions") => Tab::Sessions,
@@ -107,6 +104,8 @@ impl App {
             focus: None,
             upd,
             upd_msg: String::new(),
+            upd_started: false,
+            upd_status: Arc::new(Mutex::new(String::new())),
             info: sys_info(),
             confirm_delete: false,
             note: String::new(),
@@ -524,6 +523,16 @@ impl App {
                         ui.label(RichText::new("Это последняя версия (или нет соединения с GitHub).").color(MUTED));
                     }
                 }
+                ui.horizontal(|ui| {
+                    if ui.button("Проверить сейчас").clicked() {
+                        check_once(ui.ctx().clone(), self.upd.clone(), self.upd_status.clone());
+                    }
+                    let st = self.upd_status.lock().map(|s| s.clone()).unwrap_or_default();
+                    if !st.is_empty() {
+                        ui.label(RichText::new(st).color(MUTED));
+                    }
+                });
+                ui.label(RichText::new("Программа сама проверяет обновления каждые 5 минут, пока открыто окно.").small().color(MUTED));
             });
             card(ui, |ui| {
                 ui.label(RichText::new("Как это работает и чего не умеет").strong());
@@ -742,6 +751,32 @@ fn create_shortcut() -> String {
 
 /// Добавляет текущего пользователя в группу «Performance Log Users» (SID S-1-5-32-559, не зависит от языка Windows).
 /// Windows покажет запрос администратора. Работает в отдельном потоке, чтобы окно не зависало.
+/// Одна проверка обновления: кладёт результат в `upd`, пишет статус и будит окно, чтобы оно перерисовалось.
+fn check_once(ctx: egui::Context, upd: Arc<Mutex<Option<update::Found>>>, status: Arc<Mutex<String>>) {
+    *status.lock().unwrap() = "Проверяю…".into();
+    ctx.request_repaint();
+    std::thread::spawn(move || {
+        let r = update::check();
+        *status.lock().unwrap() = if r.is_some() { "Найдена новая версия".into() } else { "Проверено: новее версии нет".into() };
+        if r.is_some() {
+            *upd.lock().unwrap() = r;
+        }
+        ctx.request_repaint(); // без этого окно в покое не перерисуется и новость не будет видна до первого движения мыши
+    });
+}
+
+/// Проверяет обновления сразу и потом каждые 5 минут, пока открыто окно.
+fn spawn_update_loop(ctx: egui::Context, upd: Arc<Mutex<Option<update::Found>>>, status: Arc<Mutex<String>>) {
+    std::thread::spawn(move || loop {
+        if let Some(f) = update::check() {
+            *upd.lock().unwrap() = Some(f);
+            *status.lock().unwrap() = "Найдена новая версия".into();
+            ctx.request_repaint();
+        }
+        std::thread::sleep(Duration::from_secs(300));
+    });
+}
+
 fn grant_fps_rights(msg: Arc<Mutex<String>>) {
     #[cfg(windows)]
     {
@@ -861,6 +896,10 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = &ui.ctx().clone();
         self.style(ctx);
+        if !self.upd_started {
+            self.upd_started = true;
+            spawn_update_loop(ctx.clone(), self.upd.clone(), self.upd_status.clone());
+        }
         if self.stopping {
             // пока рекордер не завершился, состояние не перечитываем: иначе галочка включится обратно
             if paths::recorder_running() {
