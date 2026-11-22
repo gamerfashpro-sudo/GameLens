@@ -40,6 +40,9 @@ pub struct Sample {
     /// % времени в обработке прерываний драйверов (DPC)
     #[serde(default)]
     pub dpc_pct: Option<f32>,
+    /// FPS игры на момент замера (только если включено измерение и есть права)
+    #[serde(default)]
+    pub fps: Option<f32>,
     /// процесс на переднем плане (почти всегда это игра)
     #[serde(default)]
     pub fg: String,

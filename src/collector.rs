@@ -101,6 +101,7 @@ impl Collector {
             cpu_freq_pct: snap.cpu_freq_pct,
             pages_per_s: snap.pages_per_s,
             dpc_pct: snap.dpc_pct,
+            fps: None,
             fg,
         }
     }
